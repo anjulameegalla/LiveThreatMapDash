@@ -37,10 +37,9 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # Add the generated SVG and the map image if it exists
+          # Add the generated SVG and the map.svg file
           git add threat-map.svg
-          if [ -f "map.png" ]; then git add map.png; fi
-          if [ -f "map.jpg" ]; then git add map.jpg; fi
+          git add map.svg
           
           # Check if there are changes to commit
           if ! git diff --staged --quiet; then
