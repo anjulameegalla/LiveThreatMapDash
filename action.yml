@@ -2,6 +2,10 @@ name: 'Live Threat Map Generator'
 description: 'Generates and commits a dynamic SVG threat map using real-time data from Shodan.'
 author: 'RavinduRathnayaka'
 
+branding:
+  icon: 'globe'
+  color: 'green'
+
 inputs:
   SHODAN_API_KEY:
     description: 'Your Shodan API key. This is required.'
@@ -38,7 +42,6 @@ runs:
 
     - name: Run threat map generator script
       shell: bash
-      # Use github.action_path to find the script within the action's repository
       run: python ${{ github.action_path }}/generate_threat_map.py
       env:
         SHODAN_API_KEY: ${{ inputs.SHODAN_API_KEY }}
@@ -60,4 +63,3 @@ runs:
         else
           echo "No changes to the map, skipping commit."
         fi
-
