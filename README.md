@@ -1,6 +1,6 @@
 # 🌍 Live Threat Map Dashboard  
 
-This project generates a dynamic, **"hacker-style" cybersecurity threat map** as an SVG image.  
+This project generates a dynamic, **cybersecurity threat map** as an SVG image.  
 It uses a Python script to fetch real-time vulnerability data from **Shodan**, geolocates the IPs, and then visualizes them as animated **"comet" attacks** targeting major continental data hubs.  
 
 The entire process is automated using **GitHub Actions**, ensuring the map is updated **every six hours** with fresh data.  
