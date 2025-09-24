@@ -17,9 +17,6 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v4
 
-      - name: Sync with remote repository
-        run: git pull --rebase
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -35,17 +32,21 @@ jobs:
           SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: python generate_threat_map.py
 
-      - name: Commit and push the updated map
+      - name: Commit and push the updated map to `output` branch
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          
+
+          # Create or switch to `output` branch
+          git checkout -B output
+
+          # Add generated file(s)
           git add threat-map.svg
-          
+
           # Commit only if there are changes
           if ! git diff --staged --quiet; then
-            git commit -m "Chore: Update live threat map"
-            git push
+            git commit -m "Update threat map"
+            git push origin output --force
           else
             echo "No changes to the map, skipping commit."
           fi
