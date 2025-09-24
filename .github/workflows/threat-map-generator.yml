@@ -37,7 +37,7 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # Add the generated SVG and the map.svg file
+          # Add the generated SVG and the map.svg background file
           git add threat-map.svg
           git add map.svg
           
