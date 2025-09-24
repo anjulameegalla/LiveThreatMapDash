@@ -6,21 +6,17 @@ import shodan
 import os
 import re
 
-# --- CONFIGURATION ---
-# SECURE: API key is read from an environment variable / GitHub Secret.
 SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY")
 
 OUTPUT_SVG_FILENAME = "threat-map.svg"
 SHODAN_QUERY = "has_vuln:true"
 NUMBER_OF_RESULTS_TO_FETCH = 200
 IPS_PER_CONTINENT = 10
+FALLBACK_IPS_TO_FETCH = 200
 
-# Final dimensions from your map.svg's viewBox
 SVG_WIDTH = 2000
 SVG_HEIGHT = 1280
 
-# --- THIS SECTION IS NOW CORRECT ---
-# Corrected target coordinates for better visual balance
 CONTINENT_TARGETS = {
     "North America": (41.8781, -87.6298),  # Chicago, USA
     "Europe": (50.1109, 8.6821),          # Frankfurt, Germany
@@ -30,7 +26,6 @@ CONTINENT_TARGETS = {
     "Oceania": (-33.8688, 151.2093)       # Sydney, Australia
 }
 
-# --- MAPPING & STYLES ---
 COUNTRY_TO_CONTINENT = {
     'US': 'North America', 'CA': 'North America', 'MX': 'North America', 'GL': 'North America', 'GT': 'North America', 'CR': 'North America', 'PA': 'North America',
     'AR': 'South America', 'BR': 'South America', 'BO': 'South America', 'CL': 'South America', 'CO': 'South America', 'EC': 'South America', 'PY': 'South America', 'PE': 'South America', 'UY': 'South America', 'VE': 'South America',
@@ -40,7 +35,6 @@ COUNTRY_TO_CONTINENT = {
     'DZ': 'Africa', 'AO': 'Africa', 'BW': 'Africa', 'BI': 'Africa', 'CM': 'Africa', 'CF': 'Africa', 'TD': 'Africa', 'CG': 'Africa', 'CD': 'Africa', 'DJ': 'Africa', 'EG': 'Africa', 'GQ': 'Africa', 'ET': 'Africa', 'GA': 'Africa', 'GM': 'Africa', 'GH': 'Africa', 'GN': 'Africa', 'KE': 'Africa', 'LS': 'Africa', 'LR': 'Africa', 'LY': 'Africa', 'MG': 'Africa', 'MW': 'Africa', 'ML': 'Africa', 'MR': 'Africa', 'MA': 'Africa', 'MZ': 'Africa', 'NA': 'Africa', 'NE': 'Africa', 'NG': 'Africa', 'RW': 'Africa', 'SN': 'Africa', 'SL': 'Africa', 'SO': 'Africa', 'ZA': 'Africa', 'SS': 'Africa', 'SD': 'Africa', 'TZ': 'Africa', 'TG': 'Africa', 'TN': 'Africa', 'UG': 'Africa', 'ZM': 'Africa', 'ZW': 'Africa',
 }
 
-# "Hacker-style" neon colors for the comets
 ATTACK_COLORS = ["#00ff00", "#ff00ff", "#00ffff", "#ffea00", "#ff6600"]
 TEXT_COLOR = "#cccccc"
 LIST_BG_COLOR = "#1a1a1a"
@@ -56,8 +50,8 @@ def find_background_svg():
 
 def get_ips_from_shodan():
     if not SHODAN_API_KEY:
-        print("Error: SHODAN_API_KEY environment variable not set.")
-        return {}
+        print("Shodan API key not found.")
+        return None
     print("Fetching and sorting IPs from Shodan by continent...")
     try:
         api = shodan.Shodan(SHODAN_API_KEY)
@@ -80,19 +74,48 @@ def get_ips_from_shodan():
                 }
                 continent_ips[continent].append(threat_data)
 
-        print("IP distribution found:")
+        if not any(continent_ips.values()):
+            print("Shodan query returned no results.")
+            return None
+
+        print("IP distribution found from Shodan:")
         for continent, threats in continent_ips.items():
             if threats: print(f" - {continent}: {len(threats)} threats")
         return continent_ips
     except shodan.APIError as e:
         print(f"Error querying Shodan: {e}")
-        return {}
+        return None
+
+def get_ips_from_fallback():
+    """Fetches IPs from a public blocklist as a fallback."""
+    print("Fetching IPs from public threat feed (abuse.ch)...")
+    try:
+        url = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        
+        lines = response.text.splitlines()
+        ip_list = [line for line in lines if not line.startswith('#') and line.strip()]
+        
+        if not ip_list:
+            print("Fallback source returned no IPs.")
+            return []
+
+        sampled_ips = random.sample(ip_list, min(len(ip_list), FALLBACK_IPS_TO_FETCH))
+        
+        threats = [{'ip': ip, 'port': 'N/A', 'cve': 'FALLBACK', 'continent': None} for ip in sampled_ips]
+        print(f"Successfully fetched {len(threats)} IPs from fallback source.")
+        return threats
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching from fallback source: {e}")
+        return []
 
 def get_geolocations_batch(ips):
     if not ips: return []
     print(f"Geolocating {len(ips)} IPs using the batch API...")
     try:
-        response = requests.post("http://ip-api.com/batch?fields=lat,lon,country,query,status", json=ips, timeout=15)
+        response = requests.post("http://ip-api.com/batch?fields=lat,lon,country,countryCode,query,status", json=ips, timeout=15)
         response.raise_for_status()
         return [item for item in response.json() if item.get("status") == "success"]
     except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
@@ -100,31 +123,25 @@ def get_geolocations_batch(ips):
         return []
 
 def latlon_to_svg(lat, lon):
-    # Auto-calibrated values:
     SCALE_X = 2000 / 360.0
     SCALE_Y = 1280 / 180.0
-    
     X_OFFSET = -42.0765
     Y_OFFSET = 191.8033
-
     x = (lon + 180) * SCALE_X + X_OFFSET
     y = (lat * -1 + 90) * SCALE_Y + Y_OFFSET
     
     return x, y
 
-
-def generate_svg(attack_data_by_continent, svg_base_content):
+def generate_svg(attack_data_by_continent, svg_base_content, is_fallback):
     if not svg_base_content:
         svg_base_content = f'<svg width="{SVG_WIDTH}" height="{SVG_HEIGHT}" viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect width="100%" height="100%" fill="#0a0a0a"/>\n</svg>'
     
-    # Force black continents and green country borders
     svg_base_content = re.sub(r'(<path id="outline".*?style=")(.*?)(".*?>)', r'\1fill: #000000; fill-opacity: 1;\2\3', svg_base_content, flags=re.DOTALL)
     svg_base_content = re.sub(r'(<path id="boundaries".*?style=")(.*?)(".*?>)', r'\1stroke: #00ff00; stroke-width: 1px; fill: none;\2\3', svg_base_content, flags=re.DOTALL)
 
     injection_svg = ''
     injection_svg += f"""
     <style>
-        .attack-dot, .origin-dot {{ filter: url(#glow); }}
         .target-dot {{ filter: url(#glow); animation: pulse 2.5s ease-in-out infinite; }}
         .text {{ font-family: monospace; fill: {TEXT_COLOR}; font-size: 24px; }}
         @keyframes pulse {{ 0% {{ r: 6; opacity: 1; }} 50% {{ r: 12; opacity: 0.7; }} 100% {{ r: 6; opacity: 1; }} }}
@@ -135,6 +152,16 @@ def generate_svg(attack_data_by_continent, svg_base_content):
     list_y = 40
     list_height = 280
 
+    gradient_defs = ""
+    for color in ATTACK_COLORS:
+        gradient_id = f"grad_{color.replace('#', '')}"
+        gradient_defs += f'''
+        <linearGradient id="{gradient_id}" gradientTransform="rotate(90)">
+            <stop offset="0%" stop-color="{color}" stop-opacity="1" />
+            <stop offset="100%" stop-color="{color}" stop-opacity="0" />
+        </linearGradient>
+        '''
+
     injection_svg += f"""
     <defs>
         <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
@@ -143,6 +170,7 @@ def generate_svg(attack_data_by_continent, svg_base_content):
         <clipPath id="list-clip">
             <rect x="{list_x + 25}" y="{list_y + 60}" width="{list_width - 50}" height="{list_height}"/>
         </clipPath>
+        {gradient_defs}
     </defs>"""
     
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -162,6 +190,10 @@ def generate_svg(attack_data_by_continent, svg_base_content):
             line_text = ", ".join(chunk)
             current_y = line_y_start + (index * line_height)
             injection_svg += f'<text x="40" y="{current_y}" class="text" font-size="18px" fill="#aaaaaa">{line_text}</text>'
+
+    if is_fallback:
+        fallback_y = SVG_HEIGHT - 30
+        injection_svg += f'<text x="40" y="{fallback_y}" class="text" font-size="16px" fill="#ffcc00">Data Source: Public Blocklist (Shodan API unavailable)</text>'
 
     for lat, lon in CONTINENT_TARGETS.values():
         target_x, target_y = latlon_to_svg(lat, lon)
@@ -211,17 +243,13 @@ def generate_svg(attack_data_by_continent, svg_base_content):
                     <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" />
                 </circle>
             '''
-            
-            # Barely visible red trace line for the attack path.
             injection_svg += f'<path d="{path_data}" stroke="#ff0000" stroke-opacity="0.15" stroke-width="1" fill="none"/>'
-            
             # The invisible path provides the trajectory for the animation.
             injection_svg += f'<path id="{path_id}" d="{path_data}" stroke="none" fill="none"/>'
             
             delay = round(random.uniform(0, 5), 2)
             duration = round(random.uniform(3, 6), 2)
             
-            # Reverted to the original particle trail effect.
             num_particles = 8
             for i in range(num_particles):
                 particle_radius = max(1, 5 - i * 0.5)
@@ -241,12 +269,21 @@ def generate_svg(attack_data_by_continent, svg_base_content):
 def main():
     print("Starting threat map generation...")
     
+    is_fallback = False
     threats_by_continent = get_ips_from_shodan()
-    if not any(threats_by_continent.values()):
-        print("No threats found from Shodan to process. Exiting.")
-        return
+    
+    if threats_by_continent is None:
+        is_fallback = True
+        print("Warning: Shodan query failed. Using public threat feed as a fallback.")
+        all_threats_flat = get_ips_from_fallback()
+        if not all_threats_flat:
+            print("Fallback source also failed or returned no IPs. Exiting.")
+            with open(OUTPUT_SVG_FILENAME, "w") as f:
+                f.write(f'<svg width="{SVG_WIDTH}" height="{SVG_HEIGHT}" xmlns="http://www.w3.org/2000/svg"/>')
+            return
+    else:
+        all_threats_flat = [threat for threat_list in threats_by_continent.values() for threat in threat_list]
         
-    all_threats_flat = [threat for threat_list in threats_by_continent.values() for threat in threat_list]
     all_ips_flat = [threat['ip'] for threat in all_threats_flat]
     
     geolocated_data = get_geolocations_batch(all_ips_flat)
@@ -255,14 +292,24 @@ def main():
         print("Could not geolocate any IPs. Exiting.")
         return
 
-    geo_map = {item['query']: {'lat': item['lat'], 'lon': item['lon'], 'country': item['country']} for item in geolocated_data}
+    geo_map = {item['query']: item for item in geolocated_data}
     
     final_threat_data_by_continent = { name: [] for name in CONTINENT_TARGETS.keys() }
-    for threat in all_threats_flat:
-        if threat['ip'] in geo_map:
-            threat.update(geo_map[threat['ip']])
-            final_threat_data_by_continent[threat['continent']].append(threat)
-    
+
+    if is_fallback:
+        for threat in all_threats_flat:
+            if threat['ip'] in geo_map:
+                geo_info = geo_map[threat['ip']]
+                threat.update(geo_info)
+                continent = COUNTRY_TO_CONTINENT.get(geo_info.get('countryCode'))
+                if continent:
+                    final_threat_data_by_continent[continent].append(threat)
+    else:
+        for threat in all_threats_flat:
+             if threat['ip'] in geo_map:
+                threat.update(geo_map[threat['ip']])
+                final_threat_data_by_continent[threat['continent']].append(threat)
+
     svg_path = find_background_svg()
     svg_base_content = None
     if svg_path:
@@ -274,7 +321,7 @@ def main():
         except IOError as e:
             print(f"Error reading SVG base file: {e}")
     
-    svg_content = generate_svg(final_threat_data_by_continent, svg_base_content)
+    svg_content = generate_svg(final_threat_data_by_continent, svg_base_content, is_fallback)
     
     try:
         with open(OUTPUT_SVG_FILENAME, "w", encoding="utf-8") as f:
