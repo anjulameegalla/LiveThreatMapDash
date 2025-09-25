@@ -5,6 +5,7 @@ import datetime
 import shodan
 import os
 import re
+import ipaddress
 
 SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY")
 
@@ -12,7 +13,7 @@ OUTPUT_SVG_FILENAME = "threat-map.svg"
 SHODAN_QUERY = "has_vuln:true"
 NUMBER_OF_RESULTS_TO_FETCH = 200
 IPS_PER_CONTINENT = 10
-FALLBACK_IPS_TO_FETCH = 200
+FALLBACK_IPS_TO_FETCH = 100
 
 SVG_WIDTH = 2000
 SVG_HEIGHT = 1280
@@ -87,29 +88,65 @@ def get_ips_from_shodan():
         return None
 
 def get_ips_from_fallback():
-    """Fetches IPs from a public blocklist as a fallback."""
-    print("Fetching IPs from public threat feed (abuse.ch)...")
-    try:
-        url = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        
-        lines = response.text.splitlines()
-        ip_list = [line for line in lines if not line.startswith('#') and line.strip()]
-        
-        if not ip_list:
-            print("Fallback source returned no IPs.")
-            return []
+    """Fetches IPs from multiple blocklists and expands CIDR ranges."""
+    print("Fetching IPs from public threat feeds...")
+    
+    source_urls = [
+        "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+        "https://www.spamhaus.org/drop/drop.txt",
+        "https://www.spamhaus.org/drop/edrop.txt",
+        "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
+        "http://cinsscore.com/list/ci-badguys.txt" # New source added
+    ]
+    
+    all_ips = []
+    
+    for url in source_urls:
+        print(f"  - Querying {url.split('/')[2]}...")
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            
+            lines = response.text.splitlines()
+            ips_from_source = []
+            
+            parsed_entries = [line.split(';')[0].strip() for line in lines if not line.startswith('#') and line.strip()]
+            
+            for entry in parsed_entries:
+                try:
+                    network = ipaddress.ip_network(entry, strict=False)
+                    
+                    if network.num_addresses == 1:
+                        ips_from_source.append(str(network.network_address))
+                    elif network.num_addresses > 2:
+                        first_host = int(network.network_address) + 1
+                        last_host = int(network.broadcast_address) - 1
+                        if last_host > first_host:
+                            random_ip = ipaddress.ip_address(random.randint(first_host, last_host))
+                            ips_from_source.append(str(random_ip))
 
-        sampled_ips = random.sample(ip_list, min(len(ip_list), FALLBACK_IPS_TO_FETCH))
+                except ValueError:
+                    continue
+            
+            if ips_from_source:
+                all_ips.extend(ips_from_source)
+                print(f"    -> Processed and extracted {len(ips_from_source)} geolocatable IPs.")
         
-        threats = [{'ip': ip, 'port': 'N/A', 'cve': 'FALLBACK', 'continent': None} for ip in sampled_ips]
-        print(f"Successfully fetched {len(threats)} IPs from fallback source.")
-        return threats
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching from fallback source: {e}")
+        except requests.exceptions.RequestException as e:
+            print(f"    -> Failed to fetch from {url.split('/')[2]}: {e}")
+
+    if not all_ips:
+        print("All fallback sources failed or returned no IPs.")
         return []
+
+    unique_ips = list(set(all_ips))
+    print(f"Total unique IPs collected from all sources: {len(unique_ips)}")
+    
+    sampled_ips = random.sample(unique_ips, min(len(unique_ips), FALLBACK_IPS_TO_FETCH))
+    
+    threats = [{'ip': ip, 'port': 'N/A', 'cve': '', 'continent': None} for ip in sampled_ips]
+    print(f"Successfully sampled {len(threats)} IPs for geolocation.")
+    return threats
 
 def get_geolocations_batch(ips):
     if not ips: return []
