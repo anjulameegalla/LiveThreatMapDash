@@ -71,7 +71,7 @@ jobs:
 
 Here’s how the auto-generated map looks in action:  
 
-![Live Threat Map](./output/threat-map.svg)  
+![Live Threat Map](threat-map.svg)  
 
 ---
 
