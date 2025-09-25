@@ -32,21 +32,22 @@ jobs:
           SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: python generate_threat_map.py
 
-      - name: Commit and push the updated map to `output` branch
+      - name: Commit and push updated map to main and output branches
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
-          # Create or switch to `output` branch
-          git checkout -B output
-
-          # Add generated file(s)
           git add threat-map.svg
 
           # Commit only if there are changes
           if ! git diff --staged --quiet; then
             git commit -m "Update threat map"
-            git push origin output --force
+            
+            # Push the commit to the default branch (e.g., main)
+            git push
+
+            # Force-push the same commit to the 'output' branch
+            git push origin HEAD:output --force
           else
             echo "No changes to the map, skipping commit."
           fi
